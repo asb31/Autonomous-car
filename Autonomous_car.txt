@@ -1,0 +1,135 @@
+#include <Servo.h> //define the servo library
+
+Servo ssm;                                                      //create an instance of the servo object called ssm
+Servo esc;                                                      //create an instance of the servo object called esc
+
+float durationFront,durationLeft;
+#define trigPinFront 13                                         //defining connection for sensors.
+#define echoPinFront 12
+#define trigPinLeft 10                                          //defining connection for sensors.
+#define echoPinLeft 11
+float Ycorrection=0,Yprediction,KG;
+float Ecorrection=0,Eprediction;
+float Y1correction=0,Y1prediction,KG1;
+float E1correction=0,E1prediction;
+float Q=0.1;
+float R=0.4;
+float aim=35.0;
+float output;
+int velocity=90;
+float kp = 0.5, ki =.3, kd = 1;                               // Define PID parameters for velocity 
+float e = 0, e1 = 0, e2 = 0;//braking
+float k1 = kp + ki + kd;//braking
+float k2 = -kp - 2*kd;//braking
+float k3 = kd;//braking
+
+float Kp = 0.1, Ki =0, Kd = 0.25;                             // Define PID parameters for steering
+float E = 0, E1 = 0, E2 = 0;//braking
+float K1 = Kp + Ki + Kd;//braking
+float K2 = -Kp - 2*Kd;//braking
+float K3 = Kd;//braking
+float U=0;
+float u=0;
+float target=24; 
+
+void setup() {
+                                                               //SET REQUISITE PINS AND PIN MODES
+  Serial.begin (9600);
+  esc.attach(7); 
+  ssm.attach(6);
+  pinMode(trigPinFront, OUTPUT);  
+  pinMode(echoPinFront, INPUT);
+  pinMode(trigPinLeft, OUTPUT);
+  pinMode(echoPinLeft, INPUT);
+}
+
+void loop() { 
+                                                        // Activate Front Sensor
+  digitalWrite(trigPinFront, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPinFront, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPinFront, LOW);
+ // Measure the response from the HC-SR04 Echo Pin
+  durationFront = pulseIn(echoPinFront, HIGH);
+  float distance = 0.0176*durationFront+0.1675;       ///signal calibration
+  
+  /*kalman*/
+  Yprediction=Ycorrection;                            //velocity Kalman Filter
+  Eprediction=Ecorrection+Q;
+  //prediction equations end//
+  //correction equations//
+  KG=Eprediction/(Eprediction+R);
+  Ycorrection=Yprediction+(distance-Yprediction)*KG;
+  Ecorrection=Eprediction*(1-KG);
+  /*kalman*/
+                                                          // Activate Left Sensor
+  digitalWrite(trigPinLeft, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPinLeft, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPinLeft, LOW);
+ // Measure the response from the HC-SR04 Echo Pin
+  durationLeft = pulseIn(echoPinLeft, HIGH);
+  float distanceleft = 0.0176*durationLeft+0.1675;       // signal calibration
+
+/*kalman*/                                               //Steering Kalman Filter
+  Y1prediction=Y1correction;
+  E1prediction=E1correction+Q;
+  //prediction equations end//
+  //correction equations//
+  KG1=E1prediction/(E1prediction+R);
+  Y1correction=Y1prediction+(distanceleft-Y1prediction)*KG1;
+  E1correction=E1prediction*(1-KG1);
+  /*kalman*/
+
+                                                        //PID Velocity Controller
+  e2 = e1;
+  e1 = e;
+  e=Ycorrection-aim;                                    //offset from set point (distance)
+  u = u + k1*e + k2*e1 + k3*e2;
+
+  //PID Steering controller
+  E2 = E1;
+  E1 = E;
+  E=target-Y1correction;                                //offset from set point (turn angle)
+  U = U + K1*E + K2*E1 + K3*E2;
+ 
+if (Ycorrection>100)                                    //speed bounding otherwise motor will not be able to overcome
+{ velocity=100;                                         //inertia.  need at least a speed of 100
+  setVehicle(90+U*22,velocity);                         //we have calibrated U based on steering angles to scale our
+  delay(200);                                           //steering angles between 120 and 60
+  setVehicle(90+U*22,90);
+  delay(100);
+  }
+if (Ycorrection>40)                                    //coast for obstacles
+  {
+    velocity=min(max(90+u,100),100);
+    setVehicle(90+U*22,velocity);
+  delay(200);
+  setVehicle(90+U*22,90);
+  delay(50);
+  }
+  if (Ycorrection<=40 && Ycorrection>=33)              //brake
+  {
+    velocity=90;
+    setVehicle(90+U*22,velocity);
+  }
+  if (Ycorrection<33)                                  //reverse criteria
+  {
+    velocity=min(90+u,80);
+    setVehicle(90+U*22,90);
+    delay(50);
+    setVehicle(90+U*22,velocity);
+    delay(200);
+    setVehicle(90+U*22,90);
+  }
+}
+
+void setVehicle(int s, int v) 
+{
+  s=min(max(0,s),180);  //saturate steering command
+  v=min(max(75,v),105); //saturate velocity command
+  ssm.write(s); //write steering value to steering servo
+  esc.write(v); //write velocity value to the ESC unit
+}
